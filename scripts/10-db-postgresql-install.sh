@@ -14,6 +14,8 @@ require_vars DB_HOST DB_PORT DB_ALLOWED_CIDR DB_LISTEN_ADDRESSES DB_NAME DB_USER
 validate_pg_identifier "${DB_NAME}"
 validate_pg_identifier "${DB_USER}"
 
+[[ "${DB_PORT}" =~ ^[0-9]+$ ]] || fail "DB_PORT doit être un entier : ${DB_PORT}"
+
 log "Installation PostgreSQL sur LXC Debian 13"
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql postgresql-client postgresql-contrib
@@ -47,24 +49,87 @@ render_managed_block \
   "# END KEYCLOAK MANAGED" \
   "${PG_HBA_BLOCK}"
 
-log "Création/actualisation du rôle et de la base PostgreSQL"
-sudo -u postgres psql -v ON_ERROR_STOP=1 \
+log "Redémarrage PostgreSQL après configuration réseau"
+systemctl restart postgresql
+
+PSQL_POSTGRES=(
+  sudo -u postgres psql
+  -v ON_ERROR_STOP=1
+  -h /var/run/postgresql
+  -p "${DB_PORT}"
+  -d postgres
+)
+
+log "Création/actualisation idempotente du rôle PostgreSQL"
+"${PSQL_POSTGRES[@]}" \
   -v db_user="${DB_USER}" \
-  -v db_pass="${DB_PASSWORD}" \
-  -v db_name="${DB_NAME}" <<'SQL'
+  -v db_pass="${DB_PASSWORD}" <<'SQL'
+SET password_encryption = 'scram-sha-256';
+
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_pass')
-WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'db_user')\gexec
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM pg_roles
+  WHERE rolname = :'db_user'
+)\gexec
 
 SELECT format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'db_user', :'db_pass')\gexec
+SQL
 
-SELECT format('CREATE DATABASE %I OWNER %I ENCODING %L', :'db_name', :'db_user', 'UTF8')
-WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db_name')\gexec
+log "Contrôle de l'existence de la base PostgreSQL"
+DB_ENCODING="$(
+  "${PSQL_POSTGRES[@]}" -tAX \
+    -v db_name="${DB_NAME}" <<'SQL'
+SELECT pg_encoding_to_char(encoding)
+FROM pg_database
+WHERE datname = :'db_name';
+SQL
+)"
 
+if [[ -z "${DB_ENCODING}" ]]; then
+  log "Base ${DB_NAME} absente : création en UTF8 via template0"
+
+  "${PSQL_POSTGRES[@]}" \
+    -v db_name="${DB_NAME}" \
+    -v db_user="${DB_USER}" <<'SQL'
+SELECT format(
+  'CREATE DATABASE %I WITH OWNER = %I ENCODING = %L LC_COLLATE = %L LC_CTYPE = %L TEMPLATE = template0',
+  :'db_name',
+  :'db_user',
+  'UTF8',
+  'C.UTF-8',
+  'C.UTF-8'
+)\gexec
+SQL
+
+else
+  log "Base ${DB_NAME} existante détectée avec encodage ${DB_ENCODING}"
+
+  if [[ "${DB_ENCODING}" != "UTF8" ]]; then
+    fail "La base ${DB_NAME} existe déjà en ${DB_ENCODING}. Refus de suppression/recréation automatique. Pour Keycloak, il faut une base UTF8."
+  fi
+fi
+
+log "Actualisation idempotente des droits PostgreSQL"
+"${PSQL_POSTGRES[@]}" \
+  -v db_name="${DB_NAME}" \
+  -v db_user="${DB_USER}" <<'SQL'
+SELECT format('ALTER DATABASE %I OWNER TO %I', :'db_name', :'db_user')\gexec
 SELECT format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'db_name', :'db_user')\gexec
 SQL
 
-log "Redémarrage PostgreSQL"
-systemctl restart postgresql
+PSQL_KEYCLOAK=(
+  sudo -u postgres psql
+  -v ON_ERROR_STOP=1
+  -h /var/run/postgresql
+  -p "${DB_PORT}"
+  -d "${DB_NAME}"
+)
+
+"${PSQL_KEYCLOAK[@]}" \
+  -v db_user="${DB_USER}" <<'SQL'
+SELECT format('GRANT USAGE, CREATE ON SCHEMA public TO %I', :'db_user')\gexec
+SQL
 
 log "Contrôle local PostgreSQL"
 pg_isready -h "${DB_HOST}" -p "${DB_PORT}" -d "${DB_NAME}" || fail "PostgreSQL ne répond pas sur ${DB_HOST}:${DB_PORT}."
