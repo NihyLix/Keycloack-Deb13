@@ -1,0 +1,68 @@
+# ==============================================================================
+# Keycloak Debian 13 - var.config
+# Architecture retenue :
+# - VM Debian 13 : Keycloak
+# - LXC Debian 13 : PostgreSQL
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Rôle de la machine courante
+# ------------------------------------------------------------------------------
+# Valeurs utilisées uniquement pour lisibilité. Les scripts sont séparés :
+# - scripts/10-db-postgresql-install.sh       => à exécuter sur le LXC BDD
+# - scripts/20-keycloak-install.sh            => à exécuter sur la VM Keycloak
+NODE_ROLE="keycloak"
+
+# ------------------------------------------------------------------------------
+# Réseau
+# ------------------------------------------------------------------------------
+KEYCLOAK_APP_IP="10.0.0.10"          # IP de la VM Keycloak
+DB_HOST="10.0.0.20"                  # IP du LXC PostgreSQL
+DB_PORT="5432"
+DB_ALLOWED_CIDR="10.0.0.10/32"       # IP/CIDR autorisée côté PostgreSQL
+DB_LISTEN_ADDRESSES="10.0.0.20"      # IP d'écoute PostgreSQL. Utiliser '*' seulement si maîtrisé.
+
+# ------------------------------------------------------------------------------
+# PostgreSQL
+# ------------------------------------------------------------------------------
+DB_NAME="keycloak"
+DB_USER="keycloak"
+DB_PASSWORD="CHANGE_ME_STRONG_DB_PASSWORD"
+
+# ------------------------------------------------------------------------------
+# Keycloak
+# ------------------------------------------------------------------------------
+KEYCLOAK_VERSION="26.6.4"
+KEYCLOAK_INSTALL_ROOT="/opt/keycloak"
+KEYCLOAK_USER="keycloak"
+KEYCLOAK_GROUP="keycloak"
+
+# URL publique exposée par ton reverse proxy HTTPS.
+# Exemple : https://sso.mondomaine.local
+KEYCLOAK_PUBLIC_URL="https://sso.example.local"
+
+# Keycloak écoute en HTTP local/réseau privé. TLS doit être terminé par le reverse proxy.
+KEYCLOAK_HTTP_ENABLED="true"
+KEYCLOAK_HTTP_HOST="0.0.0.0"
+KEYCLOAK_HTTP_PORT="8080"
+KEYCLOAK_PROXY_HEADERS="xforwarded"
+
+# Interface de supervision Keycloak. Par défaut les health checks sont sur 9000.
+KEYCLOAK_MANAGEMENT_PORT="9000"
+KEYCLOAK_HEALTH_ENABLED="true"
+KEYCLOAK_METRICS_ENABLED="true"
+
+# JVM
+# OpenJDK 21 est supporté par Keycloak et disponible de manière stable sur Debian.
+# OpenJDK 25 est aussi supporté côté Keycloak, mais pas forcément disponible via les dépôts Debian standard.
+JAVA_PACKAGE="openjdk-21-jre-headless"
+JAVA_OPTS_APPEND="-XX:MaxRAMPercentage=70 -XX:InitialRAMPercentage=50"
+
+# ------------------------------------------------------------------------------
+# Bootstrap admin temporaire
+# ------------------------------------------------------------------------------
+# Ce compte sert au premier accès admin. À supprimer/remplacer après création
+# d'un vrai compte admin nominatif et MFA.
+KEYCLOAK_BOOTSTRAP_ADMIN_ENABLE="true"
+KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME="temp-admin"
+KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD="CHANGE_ME_STRONG_TEMP_ADMIN_PASSWORD"
